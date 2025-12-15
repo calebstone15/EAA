@@ -171,39 +171,16 @@ def _prompt_plot_title(app, default_title="Custom Plot"):
     return result["title"]
 
 
-# ---------- main entry ----------
-def run(app):
-    try:
-        _run_inner(app)
-    except Exception as e:
-        # show traceback so you see what went wrong
-        tb = traceback.format_exc()
-        print(tb)
-        messagebox.showerror("Custom Plot Error", tb)
-
-
-def _run_inner(app):
+def _prepare_data(app):
+    """
+    Prepares the data mask, downsampling, and generated series.
+    Returns: mask, ds, time, generated
+    """
     ctx = app.ctx
-    if ctx.df is None:
-        messagebox.showerror("Error", "Load a CSV first.")
-        return
-
-    cols = _pick_columns(app)
-    if not cols:
-        messagebox.showinfo("Info", "No columns selected.")
-        return
-
-    # Prompt for plot title after columns are selected
-    plot_title = _prompt_plot_title(app, default_title="Custom Plot")
-
-    disp_opts = _pick_display_opts(app, cols)
-
-    # ------------ prep data ------------
     mask = apply_extra_data(app)
     ds = max(app.downsampling_slider.get(), 1)
     time = ctx.df[ctx.time_col][mask].iloc[::ds]
 
-    # Prepare generated data if selected
     generated = {
         "Thrust (lbf)": ctx.df[ctx.thrust_cols].sum(axis=1)
         if ctx.thrust_cols
@@ -213,38 +190,33 @@ def _run_inner(app):
         else None,
         "O/F Ratio": (
             pd.Series(ctx.of_ratio, index=ctx.df.index[:len(ctx.of_ratio)])
-            .reindex(ctx.df.index)  # Ensure alignment with the full DataFrame index
-            .loc[mask]  # Apply the mask
-            .iloc[::ds]  # Downsample
+            .reindex(ctx.df.index)
+            .loc[mask]
+            .iloc[::ds]
             if ctx.of_ratio is not None and len(ctx.of_ratio) > 0
             else None
         ),
     }
 
-    # Debugging: Check generated data
+    # Debugging
     for key, series in generated.items():
         if series is not None:
             print(f"Generated series '{key}': {series.describe()}")
         else:
             print(f"Generated series '{key}' is None.")
 
-    # Debugging: Check mask alignment
     print(f"Mask length: {len(mask)}, DataFrame length: {len(ctx.df)}")
     print(f"Mask true count: {mask.sum()}")
 
-    # group by units
-    unit_groups = {}
-    for col in cols:
-        unit_groups.setdefault(_extract_unit(col), []).append(col)
+    return mask, ds, time, generated
 
-    # Prompt for constant lines
-    constant_lines = _prompt_constant_lines(app, unit_groups)
 
-    # ------------ build plot window ------------
-    plot_win = tk.Toplevel(app)
-    plot_win.title(plot_title)
-    plot_win.geometry("1200x900")
-
+def _plot_data(plot_win, cols, unit_groups, constant_lines, plot_title,
+               disp_opts, mask, ds, time, generated, ctx):
+    """
+    Handles the plotting logic: creating figure, axes, and plotting series.
+    Returns True if anything was plotted, False otherwise.
+    """
     fig, ax0 = plt.subplots(figsize=(12, 6), dpi=100)
     canvas = FigureCanvasTkAgg(fig, master=plot_win)
     canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
@@ -260,7 +232,7 @@ def _run_inner(app):
             ax.spines["right"].set_position(("axes", 1 + 0.1 * (idx - 1)))
         ax.set_ylabel(unit or "Value")
 
-        # Draw constant lines for this unit (dashed, user-selected color)
+        # Draw constant lines
         for title, value, color in constant_lines.get(unit, []):
             ax.axhline(value, linestyle="--", color=color, linewidth=1, alpha=0.8)
             ax.text(
@@ -280,12 +252,12 @@ def _run_inner(app):
                 ctx.df[col] if col in ctx.df.columns else generated.get(col)
             )
             if raw_series is None:
-                continue  # skip missing
+                continue
 
             # Align mask with raw_series length
             aligned_mask = mask[:len(raw_series)]
 
-            # Debugging: Check raw_series and aligned_mask
+            # Debugging
             print(f"Column '{col}' raw_series length: {len(raw_series)}")
             print(f"Aligned mask length: {len(aligned_mask)}")
             print(f"Aligned mask true count: {aligned_mask.sum()}")
@@ -310,12 +282,61 @@ def _run_inner(app):
 
         ax.legend(loc="upper right" if idx else "upper left")
 
+    if plotted_any:
+        ax0.set_xlabel("Time (s)")
+        ax0.set_title(plot_title)
+        fig.tight_layout()
+        canvas.draw()
+
+    return plotted_any
+
+
+# ---------- main entry ----------
+def run(app):
+    try:
+        _run_inner(app)
+    except Exception as e:
+        # show traceback so you see what went wrong
+        tb = traceback.format_exc()
+        print(tb)
+        messagebox.showerror("Custom Plot Error", tb)
+
+
+def _run_inner(app):
+    ctx = app.ctx
+    if ctx.df is None:
+        messagebox.showerror("Error", "Load a CSV first.")
+        return
+
+    cols = _pick_columns(app)
+    if not cols:
+        messagebox.showinfo("Info", "No columns selected.")
+        return
+
+    plot_title = _prompt_plot_title(app, default_title="Custom Plot")
+    disp_opts = _pick_display_opts(app, cols)
+
+    # ------------ prep data ------------
+    mask, ds, time, generated = _prepare_data(app)
+
+    # group by units
+    unit_groups = {}
+    for col in cols:
+        unit_groups.setdefault(_extract_unit(col), []).append(col)
+
+    # Prompt for constant lines
+    constant_lines = _prompt_constant_lines(app, unit_groups)
+
+    # ------------ build plot window ------------
+    plot_win = tk.Toplevel(app)
+    plot_win.title(plot_title)
+    plot_win.geometry("1200x900")
+
+    plotted_any = _plot_data(
+        plot_win, cols, unit_groups, constant_lines, plot_title,
+        disp_opts, mask, ds, time, generated, ctx
+    )
+
     if not plotted_any:
         plot_win.destroy()
         messagebox.showwarning("Nothing to plot", "All selected series were empty.")
-        return
-
-    ax0.set_xlabel("Time (s)")
-    ax0.set_title(plot_title)
-    fig.tight_layout()
-    canvas.draw()
