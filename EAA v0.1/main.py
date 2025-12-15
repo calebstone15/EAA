@@ -7,7 +7,7 @@ from context import AnalyzerContext  # Custom context class for managing applica
 from handlers import (load_csv, plot_isp, plot_thrust, plot_chamber_pressure,  # Importing various handlers for specific tasks
                       plot_of_ratio, plot_fuel_weight,
                       plot_oxidizer_weight, generate_all, plot_ve_from_isp, plot_c_star,
-                      test_data, custom_plot)
+                      test_data, custom_plot, plot_fuel_mdot_venturi, plot_ox_mdot_venturi)
 from PIL import Image, ImageTk
 
 import instructions  # Ensure PIL is imported
@@ -101,6 +101,12 @@ class HotfireAnalyzerApp(tk.Tk):
         tk.Button(plots2, text="Exhaust Velocity from Isp", command=lambda: plot_ve_from_isp.run(self)).pack(side=tk.LEFT, padx=3)  # Button for exhaust velocity from ISP
         tk.Button(plots2, text="Specific Impulse", command=lambda: plot_isp.run(self)).pack(side=tk.LEFT, padx=3)  # ISP calculation
         tk.Button(plots2, text="C* actual", command=lambda: plot_c_star.run(self)).pack(side=tk.LEFT, padx=3)  # C star button
+
+        plots3 = tk.Frame(self)  # Create a third frame for venturi-based mdot buttons
+        plots3.pack(side=tk.TOP, pady=10)
+
+        tk.Button(plots3, text="Fuel Mdot from Venturi", command=lambda: plot_fuel_mdot_venturi.run(self)).pack(side=tk.LEFT, padx=3)  # Fuel mass flow rate from venturi
+        tk.Button(plots3, text="Ox Mdot from Venturi", command=lambda: plot_ox_mdot_venturi.run(self)).pack(side=tk.LEFT, padx=3)  # Oxidizer mass flow rate from venturi
 
         # Bottom frame for additional actions
         bottom = tk.Frame(self)  # Create a frame for bottom buttons
