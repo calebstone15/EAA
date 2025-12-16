@@ -3,10 +3,11 @@
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+import logging
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import os
 
 
@@ -298,23 +299,26 @@ class CdACalculatorWindow(tk.Toplevel):
             self.pressure_combo.config(values=columns)
             self.weight_combo.config(values=columns)
             
-            # Try to auto-detect columns
-            for col in columns:
-                col_lower = col.lower()
-                if "time" in col_lower or col_lower == "t":
-                    self.time_combo.set(col)
-                    self.time_col = col
-                elif "pressure" in col_lower or "press" in col_lower:
-                    if not self.pressure_combo.get():
-                        self.pressure_combo.set(col)
-                        self.pressure_col = col
-                elif "weight" in col_lower or "mass" in col_lower:
-                    if not self.weight_combo.get():
-                        self.weight_combo.set(col)
-                        self.weight_col = col
+            self._autodetect_columns(columns)
                         
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load CSV: {e}")
+
+    def _autodetect_columns(self, columns):
+        """Auto-detect common columns"""
+        for col in columns:
+            col_lower = col.lower()
+            if "time" in col_lower or col_lower == "t":
+                self.time_combo.set(col)
+                self.time_col = col
+            elif "pressure" in col_lower or "press" in col_lower:
+                if not self.pressure_combo.get():
+                    self.pressure_combo.set(col)
+                    self.pressure_col = col
+            elif "weight" in col_lower or "mass" in col_lower:
+                if not self.weight_combo.get():
+                    self.weight_combo.set(col)
+                    self.weight_col = col
             
     def _open_plot_window(self):
         """Open a separate window for time selection with plot"""
@@ -335,7 +339,7 @@ class CdACalculatorWindow(tk.Toplevel):
         self.weight_col = weight_col
         
         # Create a separate plot window
-        plot_window = CdAPlotWindow(
+        CdAPlotWindow(
             self, 
             self.df, 
             time_col, 
@@ -470,7 +474,7 @@ class CdACalculatorWindow(tk.Toplevel):
                     return None
                 # Convert to seconds from start
                 return (time_dt - time_dt.min()).dt.total_seconds().values
-            except:
+            except Exception:
                 return None
         else:
             return time_numeric.values
@@ -617,6 +621,7 @@ class CdAPlotWindow(tk.Toplevel):
         self.ax1 = None
         self.ax2 = None
         self.canvas = None
+        self.time_data_numeric = None
         
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         
@@ -682,47 +687,53 @@ class CdAPlotWindow(tk.Toplevel):
         )
         self.confirm_btn.pack(side=tk.RIGHT, padx=30)
         
+    def _prepare_plot_data(self):
+        """Prepare data for plotting, including handling time/numeric parsing"""
+        # Get time data - try numeric first, then datetime
+        time_col_data = self.df[self.time_col]
+
+        # Try to parse as numeric first
+        time_numeric = pd.to_numeric(time_col_data, errors='coerce')
+
+        if time_numeric.isna().all():
+            # All NaN means it's probably a datetime string - parse it
+            try:
+                time_dt = pd.to_datetime(time_col_data, errors='coerce')
+                if time_dt.isna().all():
+                    raise ValueError("Could not parse time column as numeric or datetime")
+                # Convert to seconds from start
+                time_data = (time_dt - time_dt.min()).dt.total_seconds().values
+            except Exception:
+                raise ValueError("Could not parse time column")
+        else:
+            time_data = time_numeric.values
+
+        # Get pressure data
+        pressure_data = pd.to_numeric(self.df[self.pressure_col], errors='coerce').values
+
+        # Store for later use in calculations
+        self.time_data_numeric = time_data.copy()
+
+        # Remove NaN values for plotting
+        valid_mask = ~(np.isnan(time_data) | np.isnan(pressure_data))
+        time_data = time_data[valid_mask]
+        pressure_data = pressure_data[valid_mask]
+
+        if len(time_data) == 0:
+            raise ValueError("No valid data points to plot")
+
+        # Handle weight column if present
+        weight_data = None
+        if self.weight_col:
+            weight_data = pd.to_numeric(self.df[self.weight_col], errors='coerce').values
+            weight_data = weight_data[valid_mask]
+
+        return time_data, pressure_data, weight_data
+
     def _create_plot(self):
         """Create optimized matplotlib plot with downsampled data"""
         try:
-            # Get time data - try numeric first, then datetime
-            time_col_data = self.df[self.time_col]
-            
-            # Try to parse as numeric first
-            time_numeric = pd.to_numeric(time_col_data, errors='coerce')
-            
-            if time_numeric.isna().all():
-                # All NaN means it's probably a datetime string - parse it
-                try:
-                    time_dt = pd.to_datetime(time_col_data, errors='coerce')
-                    if time_dt.isna().all():
-                        raise ValueError("Could not parse time column as numeric or datetime")
-                    # Convert to seconds from start
-                    time_data = (time_dt - time_dt.min()).dt.total_seconds().values
-                except Exception:
-                    raise ValueError("Could not parse time column")
-            else:
-                time_data = time_numeric.values
-            
-            # Get pressure data
-            pressure_data = pd.to_numeric(self.df[self.pressure_col], errors='coerce').values
-            
-            # Store for later use in calculations
-            self.time_data_numeric = time_data.copy()
-            
-            # Remove NaN values for plotting
-            valid_mask = ~(np.isnan(time_data) | np.isnan(pressure_data))
-            time_data = time_data[valid_mask]
-            pressure_data = pressure_data[valid_mask]
-            
-            if len(time_data) == 0:
-                raise ValueError("No valid data points to plot")
-            
-            # Handle weight column if present
-            weight_data = None
-            if self.weight_col:
-                weight_data = pd.to_numeric(self.df[self.weight_col], errors='coerce').values
-                weight_data = weight_data[valid_mask]
+            time_data, pressure_data, weight_data = self._prepare_plot_data()
             
             # Downsample for plotting
             n_points = len(time_data)
@@ -733,6 +744,8 @@ class CdAPlotWindow(tk.Toplevel):
                 pressure_plot = pressure_data[plot_indices]
                 if weight_data is not None:
                     weight_plot = weight_data[plot_indices]
+                else:
+                    weight_plot = None
             else:
                 time_plot = time_data
                 pressure_plot = pressure_data
@@ -848,8 +861,8 @@ class CdAPlotWindow(tk.Toplevel):
             if line is not None:
                 try:
                     line.remove()
-                except:
-                    pass
+                except Exception as e:
+                    logging.warning(f"Error removing line: {e}")
         self.start_line = None
         self.end_line = None
         self.start_line2 = None
@@ -932,22 +945,21 @@ class CdAPlotWindow(tk.Toplevel):
         if self.cid is not None and self.fig is not None:
             try:
                 self.fig.canvas.mpl_disconnect(self.cid)
-            except:
-                pass
+            except Exception as e:
+                logging.warning(f"Error disconnecting canvas: {e}")
             self.cid = None
             
         # Close figure to release memory
         if self.fig is not None:
             try:
                 plt.close(self.fig)
-            except:
-                pass
+            except Exception as e:
+                logging.warning(f"Error closing figure: {e}")
             self.fig = None
             
         # Release grab and destroy window
         try:
             self.grab_release()
-        except:
-            pass
+        except Exception as e:
+            logging.warning(f"Error releasing grab: {e}")
         self.destroy()
-
